@@ -14,8 +14,8 @@ const fastify = Fastify({
   }
 })
 
-// Register routes
-fastify.register(routes)
+// Register routes under /geo prefix (gateway strips /v1 but keeps service prefix)
+fastify.register(routes, { prefix: '/geo' })
 
 async function start() {
   // Connect to MongoDB
