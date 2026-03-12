@@ -14,6 +14,13 @@ const fastify = Fastify({
   }
 })
 
+// Root-level health check (required by gateway health polling)
+fastify.get('/health', async () => ({
+  status: 'ok',
+  service: 'connector-geo',
+  version: '1.0.1'
+}))
+
 // Register routes under /geo prefix (gateway strips /v1 but keeps service prefix)
 fastify.register(routes, { prefix: '/geo' })
 
