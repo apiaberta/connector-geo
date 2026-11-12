@@ -1,51 +1,37 @@
 import 'dotenv/config'
-import Fastify from 'fastify'
 import mongoose from 'mongoose'
 import cron from 'node-cron'
-import { routes } from './routes.js'
-import { runSync } from './sync.js'
+import { buildApp } from './app.js'
+import {
+    MONGO_URI,
+    PORT,
+    SERVICE_NAME,
+    SYNC_CRON,
+    SYNC_TZ,
+    assertSafeMongoUri
+} from './config.js'
+import { runSync, shouldSyncOnStartup } from './sync.js'
 
-const PORT     = parseInt(process.env.PORT || '3009')
-const MONGO_URI = process.env.MONGO_URI || 'mongodb://localhost:27017/apiaberta-geo'
+assertSafeMongoUri()
 
-const fastify = Fastify({
-  logger: {
-    level: process.env.NODE_ENV === 'production' ? 'warn' : 'info'
-  }
-})
+const fastify = await buildApp()
 
-// Root-level health check (required by gateway health polling)
-fastify.get('/health', async () => ({
-  status: 'ok',
-  service: 'connector-geo',
-  version: '1.0.1'
-}))
+await mongoose.connect(MONGO_URI)
+console.log(`[db] Connected to MongoDB: ${MONGO_URI}`)
 
-// Register routes under /geo prefix (gateway strips /v1 but keeps service prefix)
-fastify.register(routes, { prefix: '/geo' })
+await fastify.listen({ port: PORT, host: '0.0.0.0' })
+console.log(`[server] ${SERVICE_NAME} listening on port ${PORT}`)
 
-async function start() {
-  // Connect to MongoDB
-  await mongoose.connect(MONGO_URI)
-  console.log(`[db] Connected to MongoDB: ${MONGO_URI}`)
-
-  // Start HTTP server
-  await fastify.listen({ port: PORT, host: '0.0.0.0' })
-  console.log(`[server] connector-geo listening on port ${PORT}`)
-
-  // Initial sync (non-blocking)
-  setImmediate(() => {
-    runSync().catch(err => console.error('[sync] Initial sync error:', err.message))
-  })
-
-  // Daily sync at 03:30
-  cron.schedule('30 3 * * *', () => {
-    console.log('[cron] Triggering daily sync...')
+cron.schedule(SYNC_CRON, () => {
+    console.log(`[cron] Triggering sync (${SYNC_CRON} ${SYNC_TZ})...`)
     runSync().catch(err => console.error('[cron] Sync error:', err.message))
-  })
-}
+}, { timezone: SYNC_TZ })
 
-start().catch(err => {
-  console.error('[startup] Fatal error:', err)
-  process.exit(1)
-})
+if (await shouldSyncOnStartup()) {
+    console.log('[sync] Data missing or older than startup max age — running ingest')
+    setImmediate(() => {
+        runSync().catch(err => console.error('[sync] Initial sync error:', err.message))
+    })
+} else {
+    console.log('[sync] Recent data present — skipping startup ingest')
+}
